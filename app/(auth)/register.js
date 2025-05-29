@@ -5,10 +5,15 @@ import * as FileSystem from 'expo-file-system';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase'; // adjust path to your config
+import { useRouter } from 'expo-router'; // <-- added this import
+import { sendEmailVerification, reload } from 'firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const IMGBB_API_KEY = 'c7c5a6ed14cef23193938da569900b18'; // Replace this
 
-const RegisterScreen = ({ navigation }) => {
+const RegisterScreen = () => {
+  const router = useRouter(); // <-- initialize router
+
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
@@ -49,36 +54,46 @@ const RegisterScreen = ({ navigation }) => {
     }
   };
 
-  const handleRegister = async () => {
-    if (!name || !address || !phone || !email || !password || !confirmPassword || !image) {
-      Alert.alert('Error', 'Please fill all fields and upload a profile picture.');
-      return;
-    }
+ const handleRegister = async () => {
+  if (!name || !address || !phone || !email || !password || !confirmPassword || !image) {
+    Alert.alert('Error', 'Please fill all fields and upload a profile picture.');
+    return;
+  }
 
-    if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match.');
-      return;
-    }
+  if (password !== confirmPassword) {
+    Alert.alert('Error', 'Passwords do not match.');
+    return;
+  }
 
-    try {
-      const imageUrl = await uploadToImgbb(image);
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const uid = userCredential.user.uid;
+  try {
+    const imageUrl = await uploadToImgbb(image);
 
-      await setDoc(doc(db, 'users', uid), {
-        name,
-        address,
-        phone,
-        email,
-        photoURL: imageUrl,
-      });
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
 
-      Alert.alert('Success', 'Account created!');
-      navigation.navigate('Login');
-    } catch (error) {
-      Alert.alert('Registration Error', error.message);
-    }
-  };
+    // Send email verification
+    await sendEmailVerification(user);
+
+    // Temporarily store user details in async storage or global state (optional)
+    // For now, just pass them via router query (not secure, better to cache locally or handle on verify page)
+    await AsyncStorage.setItem('pendingUser', JSON.stringify({
+      name,
+      address,
+      phone,
+      email,
+      photoURL: imageUrl,
+    }));
+
+    Alert.alert(
+      'Verify Your Email',
+      'A verification email has been sent to your email address. Please verify before proceeding.',
+      
+      [{ text: 'OK', onPress: () => router.replace('/(auth)/verify') }]
+    );
+  } catch (error) {
+    Alert.alert('Registration Error', error.message);
+  }
+};
 
   return (
     <ScrollView contentContainerStyle={{ padding: 20 }}>
@@ -99,7 +114,7 @@ const RegisterScreen = ({ navigation }) => {
         <Text style={styles.buttonText}>Register</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity onPress={() => navigation.navigate('Login')} style={{ marginTop: 15 }}>
+      <TouchableOpacity onPress={() => router.push('/login')} style={{ marginTop: 15 }}>
         <Text style={{ textAlign: 'center' }}>Already have an account? Login</Text>
       </TouchableOpacity>
     </ScrollView>

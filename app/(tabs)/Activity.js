@@ -33,8 +33,9 @@ export default function ActivityScreen() {
   const [userName, setUserName] = useState('');
   const [points, setPoints] = useState(0);
   const [photoURL, setPhotoURL] = useState(null); // 👈 New state for profile pic
-
+  
   useEffect(() => {
+    let intervalId;
     const fetchUserData = async () => {
       try {
         const user = auth.currentUser;
@@ -57,6 +58,8 @@ export default function ActivityScreen() {
     };
 
     fetchUserData();
+    intervalId = setInterval(fetchUserData, 10000);
+    return () => clearInterval(intervalId);
   }, []);
 
   const toggleDropdown = () => setDropdownVisible(!dropdownVisible);
@@ -75,8 +78,7 @@ export default function ActivityScreen() {
     }
   };
 
-  const openAd = () => setAdVisible(true);
-  const closeAd = () => setAdVisible(false);
+
   const openProfile = () => setProfileVisible(true);
   const closeProfile = () => setProfileVisible(false);
 
@@ -96,43 +98,50 @@ export default function ActivityScreen() {
   const [friendCount, setFriendCount] = useState(0);
   const [rank, setRank] = useState('N/A');
 
-  useEffect(() => {
-    const fetchUserData = async () => {
-      try {
-        const user = auth.currentUser;
-        if (!user) return;
+ useEffect(() => {
+  const fetchUserData = async () => {
+    try {
+      const user = auth.currentUser;
+      if (!user) return;
 
-        const docRef = doc(db, 'users', user.uid);
-        const docSnap = await getDoc(docRef);
+      const docRef = doc(db, 'users', user.uid);
+      const docSnap = await getDoc(docRef);
 
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          setUserName(data.name);
-          setPhotoURL(data.photoURL);
-        }
-
-        // 👥 Count friends
-        const friendsSnap = await getDocs(collection(db, 'users', user.uid, 'friends'));
-        setFriendCount(friendsSnap.size);
-
-        // 🏆 Calculate rank
-        const allUsersSnap = await getDocs(collection(db, 'users'));
-        const allPoints = [];
-        allUsersSnap.forEach(doc => {
-          const data = doc.data();
-          if (data.points != null) allPoints.push(data.points);
-        });
-
-        allPoints.sort((a, b) => b - a); // descending
-        const userRank = allPoints.indexOf(points) + 1;
-        setRank(userRank);
-      } catch (error) {
-        console.error('Error fetching user data or stats:', error);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setUserName(data.name);
+        setPhotoURL(data.photoURL);
       }
-    };
 
-    fetchUserData();
-  }, [points]);
+      // 👥 Count friends
+      const friendsSnap = await getDocs(collection(db, 'users', user.uid, 'friends'));
+      setFriendCount(friendsSnap.size);
+
+      // 🏆 Calculate rank
+      const allUsersSnap = await getDocs(collection(db, 'users'));
+      const allPoints = [];
+      allUsersSnap.forEach(doc => {
+        const data = doc.data();
+        if (data.points != null) allPoints.push(data.points);
+      });
+
+      allPoints.sort((a, b) => b - a); // descending
+      const userRank = allPoints.indexOf(points) + 1;
+      setRank(userRank);
+    } catch (error) {
+      console.error('Error fetching user data or stats:', error);
+    }
+  };
+
+  // Initial fetch
+  fetchUserData();
+
+  // Set interval to refresh every 10 seconds
+  const intervalId = setInterval(fetchUserData, 10000); // 10,000 ms = 10 sec
+
+  // Clear interval on cleanup
+  return () => clearInterval(intervalId);
+}, [points]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -180,9 +189,9 @@ export default function ActivityScreen() {
         </View>
 
         {/* Convert Points Button */}
-        <TouchableOpacity style={styles.actionButton} onPress={openAd}>
-          <Text style={styles.actionButtonText}>Convert My Points</Text>
-        </TouchableOpacity>
+      <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/stores')}>
+        <Text style={styles.actionButtonText}>Convert My Points</Text>
+      </TouchableOpacity>
 
         {/* Stats Cards */}
         <View style={styles.statsCardsContainer}>
@@ -206,43 +215,16 @@ export default function ActivityScreen() {
 
         {/* Bonus Offers Section */}
         <View style={styles.sectionTitleRow}>
-          <Text style={styles.sectionTitle}>Bonus Wards & Free Offers</Text>
-          <TouchableOpacity onPress={goToStores}>
-            <Text style={styles.seeAll}>See all</Text>
-          </TouchableOpacity>
+          <Text style={styles.sectionTitle}>Traffic Rewards</Text>
         </View>
 
         <View style={styles.bonusOffersContainer}>
-          {bonusOffers.length === 0 ? (
-            <Text style={styles.loadingText}>Loading offers...</Text>
-          ) : (
-            bonusOffers.map((offer) => (
-              <View key={offer.id} style={styles.bonusOfferCard}>
-                <Text>{offer.title}</Text>
-              </View>
-            ))
-          )}
-        </View>
+          <Text style={styles.Description}>Claim points as you sit in traffic </Text>
+          <Text style={styles.Description}>Use them to get amazing discounts and other lucrative offers at various stores.</Text>
+                  </View>
       </ScrollView>
 
-      {/* Ad Modal */}
-      <Modal visible={adVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Pressable style={styles.closeButton} onPress={closeAd}>
-              <Text style={styles.closeButtonText}>×</Text>
-            </Pressable>
-            <Text style={styles.modalTitle}>Partner Ad!</Text>
-            <View style={styles.modalBody}>
-              <Text>Your ad content goes here!</Text>
-              <Text>Click below to earn bonus points!</Text>
-            </View>
-            <TouchableOpacity style={styles.btnPrimary} onPress={() => alert('Offer clicked!')}>
-              <Text style={styles.btnPrimaryText}>View Offer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      
 
       {/* Profile Modal */}
       <Modal visible={profileVisible} transparent animationType="fade">
@@ -395,10 +377,12 @@ const styles = StyleSheet.create({
     marginTop: 50,
     marginBottom: 20,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    textAlign:'center',
+
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
   },
   seeAll: {
@@ -407,17 +391,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   bonusOffersContainer: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     justifyContent: 'space-between',
   },
-  bonusOfferCard: {
-    backgroundColor: '#e0f2f1',
-    borderRadius: 12,
-    width: '30%',
-    height: 100,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 10,
+  Description: {
+    fontSize:16,
+     color: 'grey',
+    fontWeight: '500',
   },
 
   loadingText: {

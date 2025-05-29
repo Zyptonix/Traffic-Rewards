@@ -1,20 +1,19 @@
 {
   "expo": {
+    "entryPoint": "./node_modules/expo-router/entry",
     "name": "Traffic Rewards",
     "slug": "traffic-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "trafficapp",
-    "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
       "config": {
@@ -23,11 +22,12 @@
         }
       },
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.anonymous.trafficapp"
+      "package": "com.anonymous.trafficapp",
+      "runtimeVersion": "1.0.0"
     },
     "web": {
       "bundler": "metro",
@@ -39,7 +39,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/splashscreen.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
@@ -54,6 +54,9 @@
       "eas": {
         "projectId": "65586440-555e-4261-931f-832f25c339c0"
       }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/65586440-555e-4261-931f-832f25c339c0"
     }
   }
 }

@@ -5,31 +5,24 @@ export default function TabsLayout() {
   return (
     <Tabs screenOptions={{ tabBarActiveTintColor: '#007aff' }}>
       <Tabs.Screen
-        name="login"
+        name="dashboard"
         options={{
-          title: 'Login',
+          title: 'Dashboard',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="person" size={size} color={color} />
           ),
         }}
       />
       <Tabs.Screen
-        name="register"
+        name="add-store"
         options={{
-          title: 'Register',
+          title: 'Add Store',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="person-add" size={size} color={color} />
           ),
         }}
       />
-      <Tabs.Screen
-          name="verify"
-          options={{ href: null }}
-      />      
-      <Tabs.Screen
-          name="reset"
-          options={{ href: null }}
-      />
+
     </Tabs>
   );
 }

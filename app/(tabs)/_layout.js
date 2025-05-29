@@ -40,14 +40,6 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="addstore"
-        options={{
-          title: 'Add Store',
-          tabBarIcon: ({ color, size }) => <Ionicons name="add" size={size} color={color} />,
-        }}
-      />
-      {/* Remove the dynamic route from tabs */}
-      <Tabs.Screen
         name="Profilepage"
         options={{
           title: 'Profile',

@@ -162,7 +162,7 @@ const renderUser = ({ item }) => {
         showsHorizontalScrollIndicator={false}
       />
       </View>
-      <Text style={styles.subtitle}>Leaderboard</Text>
+      <Text style={styles.subtitle}>Friends Leaderboard</Text>
       {renderLeaderboard()}
     </View>
   );

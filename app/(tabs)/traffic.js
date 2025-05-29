@@ -19,11 +19,11 @@ const GOOGLE_API_KEY = 'AIzaSyBWTvdRIEMQz15-EVi654p5Bpq77wYpDgE'; // <- Replace 
 
 const BUFFER_SIZE = 10;
 const STILL_THRESHOLD = 0.1;
-const ONE_MINUTE = 1000 * 60;
+const ONE_MINUTE = 1000 * 60 * 5;
 
 export default function TrafficPage() {
   const { points, setPoints, lastPointTime, setLastPointTime, loading } = usePoints();
-
+  const [trafficKey, setTrafficKey] = useState(0);
   const [location, setLocation] = useState(null);
   const [snappedLocation, setSnappedLocation] = useState(null);
   const [deltaValue, setDeltaValue] = useState(0);
@@ -44,7 +44,8 @@ export default function TrafficPage() {
 
   const user = auth.currentUser;
   const userDocRef = user ? doc(db, 'users', user.uid) : null;
-
+  ensureUserPointsField(userDocRef)
+  .catch(console.error);
   const prevAccRef = useRef(null);
   function getDestinationFromHeading(lat, lon, heading = 0, distanceMeters = 1000) {
   const R = 6371e3;
@@ -60,7 +61,7 @@ export default function TrafficPage() {
     Math.sin(θ) * Math.sin(δ) * Math.cos(φ1),
     Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2)
   );
-
+  
   return {
     latitude: φ2 * 180 / Math.PI,
     longitude: λ2 * 180 / Math.PI,
@@ -211,7 +212,7 @@ export default function TrafficPage() {
 
         const distance = getDistanceFromLatLonInMeters(latitude, longitude, snapped.latitude, snapped.longitude);
         setDistanceToRoad(distance);
-        setIsOnRoad(distance < 20);
+        setIsOnRoad(distance < 10);
       } else {
         setIsOnRoad(false);
       }
@@ -220,18 +221,37 @@ export default function TrafficPage() {
     }
   };
 
-  useEffect(() => {
-    if (!location) return;
-    fetchTrafficStatus();
-    checkIfOnRoad();
+  async function ensureUserPointsField(userDocRef) {
+  const docSnap = await getDoc(userDocRef);
 
-    const intervalId = setInterval(() => {
-      fetchTrafficStatus();
-      checkIfOnRoad();
-    }, 30000);
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    if (!('points' in data)) {
+      // points field is missing, add it with default value 0
+      await updateDoc(userDocRef, { points: 0 });
+      console.log("Points field was missing, initialized to 0.");
+      points=0
+    } 
+  } else {
+    // User document does not exist, create it with points=0
+    await setDoc(userDocRef, { points: 0, pointHistory: [] });
+    console.log("User doc created with points initialized to 0.");
 
-    return () => clearInterval(intervalId);
-  }, [location]);
+  }
+}
+
+useEffect(() => {
+  const fetchAll = async () => {
+    await fetchTrafficStatus(); 
+    await checkIfOnRoad();
+  };
+
+  if (!location) return;
+  fetchAll();
+
+  const intervalId = setInterval(fetchAll, 30000);
+  return () => clearInterval(intervalId);
+}, [location?.latitude, location?.longitude]); // restrict unnecessary runs
 
  useEffect(() => {
   const interval = setInterval(async () => {
@@ -240,7 +260,7 @@ export default function TrafficPage() {
     const inRedZone = trafficStatusRef.current === 'Heavy Traffic (Red Zone)';
 const inYellowZone = trafficStatusRef.current === 'Moderate Traffic (Yellow Zone)';
     if (isStuckRef.current && cooldownReady && !pointsAwardedThisStuck.current && isOnRoadRef.current) {
-
+      
       let pointsToAdd = 0;
       let reason = '';
 
@@ -305,11 +325,18 @@ const inYellowZone = trafficStatusRef.current === 'Moderate Traffic (Yellow Zone
       </View>
     );
   }
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTrafficKey(prev => prev + 1); // force remount
+    }, 60000); // every 1 minute
 
+    return () => clearInterval(id);
+  }, []);
   return (
     <View style={styles.container}>
       <MapView
         provider={PROVIDER_GOOGLE}
+        key={trafficKey}
         style={styles.map}
         showsTraffic={true}
         region={

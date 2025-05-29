@@ -3,6 +3,7 @@ import { View, TextInput, Text, StyleSheet, Image, Alert, ScrollView, TouchableO
 import * as ImagePicker from 'expo-image-picker';
 import { getFirestore, collection, addDoc } from 'firebase/firestore';
 import { firebaseApp } from '../../lib/firebase';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const imgbbAPIKey = 'c7c5a6ed14cef23193938da569900b18'; // Replace with your actual imgbb API key
 
@@ -14,7 +15,7 @@ export default function AddStoreScreen() {
   const [imageUri, setImageUri] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [imageBase64, setImageBase64] = useState(null);
-
+  const [address, setAddress] = useState('');
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -46,7 +47,7 @@ export default function AddStoreScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!name || !offer || !points || !category || !imageUri) {
+    if (!name || !offer || !points || !category || !imageUri|| !address) {
       Alert.alert('Please fill all fields and select an image.');
       return;
     }
@@ -61,6 +62,7 @@ export default function AddStoreScreen() {
         offer,
         pointsNeeded: parseInt(points),
         category,
+        address,
         image: imageUrl,
       });
 
@@ -69,6 +71,7 @@ export default function AddStoreScreen() {
       setOffer('');
       setPoints('');
       setCategory('');
+      setAddress('');
       setImageUri(null);
     } catch (error) {
       console.error('Error adding store:', error);
@@ -79,6 +82,7 @@ export default function AddStoreScreen() {
   };
 
   return (
+    <SafeAreaView>
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.header}>Add New Store</Text>
 
@@ -104,6 +108,14 @@ export default function AddStoreScreen() {
         style={styles.input}
         placeholderTextColor="#888"
       />
+      <TextInput
+        placeholder="Address"
+        value={address}
+        onChangeText={setAddress}
+        style={styles.input}
+        placeholderTextColor="#888"
+        />
+
       <TextInput
         placeholder="Category (e.g. Food, Fashion)"
         value={category}
@@ -132,6 +144,7 @@ export default function AddStoreScreen() {
         )}
       </TouchableOpacity>
     </ScrollView>
+</SafeAreaView>
   );
 }
 
