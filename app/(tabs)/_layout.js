@@ -9,6 +9,7 @@ export default function TabsLayout() {
         options={{
           title: 'Activity',
           tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
+          
         }}
       />
       <Tabs.Screen
@@ -23,15 +24,10 @@ export default function TabsLayout() {
         options={{
           title: 'Points',
           tabBarIcon: ({ color, size }) => <Ionicons name="star" size={size} color={color} />,
+          href: null
         }}
       />
-      <Tabs.Screen
-        name="friends"
-        options={{
-          title: 'Friends',
-          tabBarIcon: ({ color, size }) => <Ionicons name="person-add" size={size} color={color} />,
-        }}
-      />
+
       <Tabs.Screen
         name="traffic"
         options={{
@@ -44,6 +40,7 @@ export default function TabsLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, size }) => <Ionicons name="book" size={size} color={color} />,
+          href: null 
         }}
       />
       <Tabs.Screen
@@ -52,7 +49,26 @@ export default function TabsLayout() {
           title: 'Redeemed',
           tabBarIcon: ({ color, size }) => <Ionicons name="flame-outline" size={size} color={color} />,
         }}
+      
       />
+            <Tabs.Screen
+        name="friends"
+        options={{
+          title: 'Friends',
+          tabBarIcon: ({ color, size }) => <Ionicons name="person-add" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="(games)"
+        options={{
+          title: 'Games',
+          tabBarIcon: ({ color, size }) => <Ionicons name="baseball-outline" size={size} color={color} />,
+          headerShown: false,
+          tabBarStyle: { display: 'none' },
+        }}
+      
+      />
+      
       <Tabs.Screen
           name="store/[id]"
           options={{ href: null }}

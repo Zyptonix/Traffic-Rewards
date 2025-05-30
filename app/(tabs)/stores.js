@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { getFirestore, collection, getDocs } from 'firebase/firestore';
 import { firebaseApp } from '../../lib/firebase';
 
-const categories = ['All', 'Food', 'Grocery', 'Medicine Stores', 'Maintenance'];
+const categories = ['All', 'Food', 'Medicine', 'Transport', 'Grocery'];
 
 export default function StoresScreen() {
   const router = useRouter();

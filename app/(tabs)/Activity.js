@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { auth, db } from '../../lib/firebase'; // path to your config file
 import { signOut } from 'firebase/auth';
 import { getDoc, doc } from 'firebase/firestore';
@@ -11,9 +11,11 @@ import {
   StyleSheet,
   Modal,
   Pressable,
+  FlatList,
+  ActivityIndicator,
   SafeAreaView,
   Alert,
-  Image,  // <-- Added missing import
+  Image,
 } from 'react-native';
 import { usePoints } from '../../context/PointsContext'; // ✅ Import your points context
 import { collection, getDocs } from 'firebase/firestore';
@@ -27,13 +29,14 @@ export default function ActivityScreen() {
   const [adVisible, setAdVisible] = useState(false);
   const [profileVisible, setProfileVisible] = useState(false);
   const router = useRouter();
-
+  const [pointHistory, setPointHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [dropdownVisible, setDropdownVisible] = useState(false);
   const dropdownRef = useRef(null);
   const [userName, setUserName] = useState('');
   const [points, setPoints] = useState(0);
   const [photoURL, setPhotoURL] = useState(null); // 👈 New state for profile pic
-  
+
   useEffect(() => {
     let intervalId;
     const fetchUserData = async () => {
@@ -48,12 +51,15 @@ export default function ActivityScreen() {
           const data = docSnap.data();
           setPoints(data.points)
           setUserName(data.name);
+          setPointHistory(data.pointHistory || []);
           setPhotoURL(data.photoURL); // 👈 Save the profile picture
         } else {
           console.log('No user document found');
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
+      } finally {
+        setLoading(false); // Set loading to false after fetch
       }
     };
 
@@ -61,6 +67,8 @@ export default function ActivityScreen() {
     intervalId = setInterval(fetchUserData, 10000);
     return () => clearInterval(intervalId);
   }, []);
+
+
 
   const toggleDropdown = () => setDropdownVisible(!dropdownVisible);
   const goToProfile = () => {
@@ -98,50 +106,51 @@ export default function ActivityScreen() {
   const [friendCount, setFriendCount] = useState(0);
   const [rank, setRank] = useState('N/A');
 
- useEffect(() => {
-  const fetchUserData = async () => {
-    try {
-      const user = auth.currentUser;
-      if (!user) return;
+  useEffect(() => {
+    const fetchUserDataAndStats = async () => { // Renamed to avoid confusion with initial fetch
+      try {
+        const user = auth.currentUser;
+        if (!user) return;
 
-      const docRef = doc(db, 'users', user.uid);
-      const docSnap = await getDoc(docRef);
+        const docRef = doc(db, 'users', user.uid);
+        const docSnap = await getDoc(docRef);
 
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setUserName(data.name);
-        setPhotoURL(data.photoURL);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          // setPoints(data.points); // Points are already updated by the other useEffect
+          setUserName(data.name);
+          setPhotoURL(data.photoURL);
+        }
+
+        // 👥 Count friends
+        const friendsSnap = await getDocs(collection(db, 'users', user.uid, 'friends'));
+        setFriendCount(friendsSnap.size);
+
+        // 🏆 Calculate rank
+        const allUsersSnap = await getDocs(collection(db, 'users'));
+        const allPoints = [];
+        allUsersSnap.forEach(doc => {
+          const data = doc.data();
+          if (data.points != null) allPoints.push(data.points);
+        });
+
+        allPoints.sort((a, b) => b - a); // descending
+        const userRank = allPoints.indexOf(points) + 1; // Use the 'points' state from the other useEffect
+        setRank(userRank);
+      } catch (error) {
+        console.error('Error fetching user data or stats:', error);
       }
+    };
 
-      // 👥 Count friends
-      const friendsSnap = await getDocs(collection(db, 'users', user.uid, 'friends'));
-      setFriendCount(friendsSnap.size);
+    // Initial fetch
+    fetchUserDataAndStats();
 
-      // 🏆 Calculate rank
-      const allUsersSnap = await getDocs(collection(db, 'users'));
-      const allPoints = [];
-      allUsersSnap.forEach(doc => {
-        const data = doc.data();
-        if (data.points != null) allPoints.push(data.points);
-      });
+    // Set interval to refresh every 10 seconds
+    const intervalId = setInterval(fetchUserDataAndStats, 10000); // 10,000 ms = 10 sec
 
-      allPoints.sort((a, b) => b - a); // descending
-      const userRank = allPoints.indexOf(points) + 1;
-      setRank(userRank);
-    } catch (error) {
-      console.error('Error fetching user data or stats:', error);
-    }
-  };
-
-  // Initial fetch
-  fetchUserData();
-
-  // Set interval to refresh every 10 seconds
-  const intervalId = setInterval(fetchUserData, 10000); // 10,000 ms = 10 sec
-
-  // Clear interval on cleanup
-  return () => clearInterval(intervalId);
-}, [points]);
+    // Clear interval on cleanup
+    return () => clearInterval(intervalId);
+  }, [points]); // Depend on 'points' so rank updates when points change
 
   return (
     <SafeAreaView style={styles.container}>
@@ -187,18 +196,35 @@ export default function ActivityScreen() {
             </View>
           </View>
         </View>
+         {/* Go to Games Button */} 
+        <TouchableOpacity
+          style={[styles.actionButton, styles.gamesButton]} // Apply base actionButton style and specific gamesButton style
+          onPress={() => router.replace('../(games)/home')} // Navigate to the games index page
+        >
+          <Text style={styles.actionButtonText}>🎮 Go to Games</Text>
+        </TouchableOpacity>
+        
 
         {/* Convert Points Button */}
-      <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/stores')}>
-        <Text style={styles.actionButtonText}>Convert My Points</Text>
-      </TouchableOpacity>
+        <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/stores')}>
+          <Text style={styles.actionButtonText}>Convert My Points</Text>
+        </TouchableOpacity>
+
+       
+        {/* See Points History Button */}
+        <TouchableOpacity
+          style={styles.actionButton}
+          onPress={() => router.push('/points')} // Navigate to points history page
+        >
+          <Text style={styles.actionButtonText}>📊 See Points History</Text>
+        </TouchableOpacity>
 
         {/* Stats Cards */}
         <View style={styles.statsCardsContainer}>
           <View style={styles.statCard}>
             <TrophyIcon />
             <Text style={styles.statCardValue}>{rank}</Text>
-            <Text style={styles.statCardLabel}>Rank</Text>
+            <Text style={styles.statCardLabel}>Overall Rank</Text>
           </View>
           <View style={styles.statCard}>
             <FriendsIcon />
@@ -213,18 +239,8 @@ export default function ActivityScreen() {
         </View>
 
 
-        {/* Bonus Offers Section */}
-        <View style={styles.sectionTitleRow}>
-          <Text style={styles.sectionTitle}>Traffic Rewards</Text>
-        </View>
-
-        <View style={styles.bonusOffersContainer}>
-          <Text style={styles.Description}>Claim points as you sit in traffic </Text>
-          <Text style={styles.Description}>Use them to get amazing discounts and other lucrative offers at various stores.</Text>
-                  </View>
       </ScrollView>
 
-      
 
       {/* Profile Modal */}
       <Modal visible={profileVisible} transparent animationType="fade">
@@ -239,7 +255,7 @@ export default function ActivityScreen() {
               style={styles.btnPrimary}
               onPress={() => {
                 closeProfile();
-                router.push("/ProfilePage");
+                router.push("/Profilepage");
               }}
             >
               <Text style={styles.btnPrimaryText}>Manage Account</Text>
@@ -286,13 +302,17 @@ const styles = StyleSheet.create({
 
   mainContent: {
     paddingHorizontal: 20,
-    paddingBottom: 80,
+    paddingBottom: 40, // reduced from 80 to reduce bottom whitespace
+    paddingTop: 20,    // add some top padding to separate from top bar
+    alignItems: 'center', // center horizontally all child content
   },
 
   // Progress Gauge
   progressGaugeContainer: {
-    marginTop: 40,
+    marginTop: 20, // reduced margin top from 40 for less gap
+    marginBottom:20,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   progressArc: {
     width: 180,
@@ -328,7 +348,7 @@ const styles = StyleSheet.create({
 
   // Button
   actionButton: {
-    marginTop: 40,
+    marginTop: 20, // Adjusted to 20 for consistent spacing between buttons
     backgroundColor: '#4caf50',
     borderRadius: 25,
     paddingVertical: 14,
@@ -336,16 +356,22 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   actionButtonText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  gamesButton: {
+    backgroundColor: '#673AB7', // A distinct color for the games button (deep purple)
+    marginTop: 20, // Add some space between the two buttons
   },
 
   // Stats Cards
   statsCardsContainer: {
-    marginTop: 40,
+    marginTop: 30, // reduced from 40 for tighter spacing
     flexDirection: 'row',
     justifyContent: 'space-around',
+    width: '100%',    // full width for even spacing
+    maxWidth: 400,    // limit max width so cards don't spread too far
   },
   statCard: {
     width: 100,
@@ -358,6 +384,7 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 8,
+    marginHorizontal: 5, // add small horizontal margin between cards
   },
   statIcon: {
     fontSize: 30,
@@ -372,44 +399,11 @@ const styles = StyleSheet.create({
     color: '#333',
   },
 
-  // Bonus Offers
-  sectionTitleRow: {
-    marginTop: 50,
-    marginBottom: 20,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    textAlign:'center',
-
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  seeAll: {
-    fontSize: 16,
-    color: '#4caf50',
-    fontWeight: '600',
-  },
-  bonusOffersContainer: {
-    flexDirection: 'column',
-    justifyContent: 'space-between',
-  },
-  Description: {
-    fontSize:16,
-     color: 'grey',
-    fontWeight: '500',
-  },
-
-  loadingText: {
-    textAlign: 'center',
-    color: '#888',
-  },
-
   // Dropdown Box
   dropdownBox: {
     position: 'absolute',
     top: 60,
-    right: 20,
+    left: 5,
     backgroundColor: '#fff',
     borderRadius: 12,
     padding: 12,
@@ -457,10 +451,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 12,
   },
-  modalBody: {
-    marginBottom: 20,
-  },
-
   btnPrimary: {
     backgroundColor: '#4caf50',
     paddingVertical: 14,
@@ -477,5 +467,41 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
+  },
+
+  subtitle: {
+    fontSize: 20,
+    marginTop: 30,
+    marginBottom: 10,
+    fontWeight: '500',
+    color: '#555',
+    textAlign: 'center',
+  },
+
+  historyList: {
+    paddingBottom: 20,
+  },
+  historyItem: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 10,
+    elevation: 2,
+  },
+  reason: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#222',
+  },
+  time: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 5,
+  },
+  emptyText: {
+    textAlign: 'center',
+    marginTop: 20,
+    color: '#999',
+    fontStyle: 'italic',
   },
 });

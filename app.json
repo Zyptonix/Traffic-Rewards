@@ -1,6 +1,6 @@
 {
   "expo": {
-    "entryPoint": "./node_modules/expo-router/entry",
+   
     "name": "Traffic Rewards",
     "slug": "traffic-app",
     "version": "1.0.0",
@@ -15,6 +15,7 @@
         "policy": "appVersion"
       }
     },
+
     "android": {
       "config": {
         "googleMaps": {
@@ -23,11 +24,19 @@
       },
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0ea5ac"
       },
       "edgeToEdgeEnabled": true,
       "package": "com.anonymous.trafficapp",
-      "runtimeVersion": "1.0.0"
+      "runtimeVersion": "2.0.0",
+      "versionCode": 5,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION", 
+        "FOREGROUND_SERVICE",   
+        "FOREGROUND_SERVICE_LOCATION"       
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -42,7 +51,7 @@
           "image": "./assets/images/splashscreen.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#0ea5ac"
         }
       ]
     ],
