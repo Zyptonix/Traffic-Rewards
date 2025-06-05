@@ -4,7 +4,6 @@ import { Slot } from 'expo-router';
 export default function RootLayout({ children }) {
   return (
     <PointsProvider>
-        
         <Slot />
     </PointsProvider>
   );

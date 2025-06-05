@@ -17,6 +17,8 @@ import {
   Alert,
   Image,
 } from 'react-native';
+import { NativeModules } from 'react-native';
+console.log(NativeModules);
 import { usePoints } from '../../context/PointsContext'; // ✅ Import your points context
 import { collection, getDocs } from 'firebase/firestore';
 // Icons as emoji placeholders
