@@ -5,11 +5,13 @@ import {
     StyleSheet,
     Dimensions,
     TouchableOpacity,
-    Alert,
+    Alert, // Using native Alert again
     PanResponder,
-    Animated, // Import Animated
+    Animated,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
 
 import { doc, updateDoc, increment, getDoc, setDoc, arrayUnion } from 'firebase/firestore';
 import { auth, db } from '../../../lib/firebase';
@@ -17,27 +19,31 @@ import { auth, db } from '../../../lib/firebase';
 const { width, height } = Dimensions.get('window');
 
 const BALL_SIZE = 30;
-const GRAVITY = 0.4;
-const JUMP_VELOCITY = -12;
-const PLATFORM_WIDTH = 80;
+const GRAVITY = 0.2;
+const JUMP_VELOCITY = -8;
+const PLATFORM_WIDTH = 100;
 const PLATFORM_HEIGHT = 10;
 const OBSTACLE_SIZE = 25;
 const SCROLL_SPEED = 2;
-const MAX_PLATFORMS = 5;
-const MAX_OBSTACLES = 3;
-const BALL_MOVE_SPEED = 5;
+const MAX_PLATFORMS = 5; // Fixed number of platforms
+const MAX_OBSTACLES = 3; // Fixed number of obstacles
 const HORIZONTAL_REACH_RANGE = width / 3;
-const PLATFORM_SPACING_Y = 120;
-const OBSTACLE_SPAWN_HEIGHT_OFFSET = 100;
+const PLATFORM_SPACING_Y = 100;
 
 // Define GAME_AREA dimensions based on overall screen
 const GAME_AREA_WIDTH_PX = width;
-const GAME_AREA_HEIGHT_PX = height * 0.85; // Game area takes 85% of screen height
-const GAME_AREA_BORDER_WIDTH = 2; // Border width for the game area
+const GAME_AREA_HEIGHT_PX = height * 0.85;
+const GAME_AREA_BORDER_WIDTH = 2;
 
 // Define PLAYABLE dimensions (inner space) considering the border
 const PLAYABLE_WIDTH_PX = GAME_AREA_WIDTH_PX - (2 * GAME_AREA_BORDER_WIDTH);
 const PLAYABLE_HEIGHT_PX = GAME_AREA_HEIGHT_PX - (2 * GAME_AREA_BORDER_WIDTH);
+
+// Define the background task name (from TrafficPage)
+const LOCATION_TRACKING_TASK = 'trafficshare-location-task';
+
+// Consistent and larger off-screen spawn height for obstacles
+const INITIAL_OBSTACLE_OFFSCREEN_HEIGHT = PLAYABLE_HEIGHT_PX * 1.2; // Spawn 1.2x game height above
 
 /**
  * Generates a random X position for a platform or obstacle, biased towards a target X.
@@ -47,7 +53,6 @@ const PLAYABLE_HEIGHT_PX = GAME_AREA_HEIGHT_PX - (2 * GAME_AREA_BORDER_WIDTH);
  */
 function getBiasedRandomX(targetX) {
     let newX = targetX - HORIZONTAL_REACH_RANGE / 2 + Math.random() * HORIZONTAL_REACH_RANGE;
-    // Clamp newX to ensure it stays within the PLAYABLE_WIDTH_PX (inner game area)
     newX = Math.max(0, Math.min(PLAYABLE_WIDTH_PX - PLATFORM_WIDTH, newX));
     return newX;
 }
@@ -57,31 +62,28 @@ function getBiasedRandomX(targetX) {
  * Manages game state, physics, rendering, and Firebase integration for points.
  */
 export default function BounceGame() {
-    // Animated.Value objects for ball's position, allowing native animation
     const ballXAnim = useRef(new Animated.Value(PLAYABLE_WIDTH_PX / 2 - BALL_SIZE / 2)).current;
-    const ballYAnim = useRef(new Animated.Value(PLAYABLE_HEIGHT_PX * 0.7)).current; // Initial Y for ball
+    const ballYAnim = useRef(new Animated.Value(PLAYABLE_HEIGHT_PX * 0.7)).current;
 
-    // State for game logic and UI display
     const [score, setScore] = useState(0);
     const [gameOver, setGameOver] = useState(false);
+    // platforms and obstacles state will now hold objects with Animated.Value for yPos and xPos
     const [platforms, setPlatforms] = useState([]);
     const [obstacles, setObstacles] = useState([]);
-    const [currentPoints, setCurrentPoints] = useState(0); // User's total points from Firebase
+    const [currentPoints, setCurrentPoints] = useState(0);
 
-    // Refs to hold the latest state values for the game loop to avoid stale closures.
-    // Animated values are accessed directly via ._value, so no separate refs for them.
-    const velocityYRef = useRef(0); // Ball's vertical velocity
-    const platformsRef = useRef(platforms); // Current platforms array
-    const obstaclesRef = useRef(obstacles); // Current obstacles array
-    const scoreRef = useRef(score); // Current game score
-    const gameOverRef = useRef(gameOver); // Game over status
-    const intervalRef = useRef(null); // ID for the game loop interval
-    const lastAwardedScoreRef = useRef(0); // Tracks score for awarding Firebase points
-    const horizontalMoveDirectionRef = useRef(0); // -1: left, 0: none, 1: right for ball movement
+    const velocityYRef = useRef(0);
+    // platformsRef and obstaclesRef will now hold the actual array objects whose Animated.Values are mutated
+    const platformsRef = useRef([]);
+    const obstaclesRef = useRef([]);
+    const scoreRef = useRef(score);
+    const gameOverRef = useRef(gameOver);
+    const requestAnimationFrameRef = useRef(null);
+    const lastAwardedScoreRef = useRef(0);
+
+    const ballStartX = useRef(0);
 
     // Update refs whenever their corresponding state changes
-    useEffect(() => { platformsRef.current = platforms; }, [platforms]);
-    useEffect(() => { obstaclesRef.current = obstacles; }, [obstacles]);
     useEffect(() => { scoreRef.current = score; }, [score]);
     useEffect(() => { gameOverRef.current = gameOver; }, [gameOver]);
 
@@ -114,7 +116,6 @@ export default function BounceGame() {
                     await updateDoc(userDocRef, updates);
                 }
             } else {
-                // If document doesn't exist, create it with initial fields
                 await setDoc(userDocRef, { points: 0, pointHistory: [] });
             }
         } catch (error) {
@@ -133,7 +134,7 @@ export default function BounceGame() {
         }
         const userDocRef = doc(db, 'users', userId);
         try {
-            await ensureUserPointsField(userId); // Ensure fields exist before trying to read
+            await ensureUserPointsField(userId);
             const docSnap = await getDoc(userDocRef);
             if (docSnap.exists()) {
                 setCurrentPoints(docSnap.data().points ?? 0);
@@ -155,208 +156,227 @@ export default function BounceGame() {
         const userId = auth.currentUser?.uid;
         if (!userId) {
             console.warn("BounceGame: User ID not available. Cannot update points.");
-            Alert.alert('Authentication Error', 'Please log in to save your points.');
+            Alert.alert('Authentication Error', 'Please log in to save your points.'); // Using Alert
             return;
         }
 
         const userDocRef = doc(db, 'users', userId);
 
         try {
-            await ensureUserPointsField(userId); // Ensure fields exist before updating
+            await ensureUserPointsField(userId);
             await updateDoc(userDocRef, {
-                points: increment(amount), // Atomically increment points
-                pointHistory: arrayUnion({ // Add transaction to history array
+                points: increment(amount),
+                pointHistory: arrayUnion({
                     amount: amount,
                     reason: reason,
                     timestamp: new Date().toISOString(),
                 }),
             });
-            loadCurrentPoints(); // Refresh displayed points after update
+            loadCurrentPoints();
         } catch (error) {
             console.error("BounceGame: Error updating points in Firebase:", error);
-            Alert.alert('Error', `Failed to add points: ${error.message}`);
+            Alert.alert('Error', `Failed to add points: ${error.message}`); // Using Alert
         }
     }, [ensureUserPointsField, loadCurrentPoints]);
 
     /**
-     * The main game update loop. This function is called repeatedly by setInterval.
-     * It handles ball movement, collisions, platform/obstacle scrolling, and spawning.
+     * The main game update loop. This function is called repeatedly by requestAnimationFrame.
+     * It handles ball movement, collisions, platform/obstacle scrolling, and recycling.
      */
     const update = useCallback(() => {
+        // Schedule the next frame first to keep the loop running
+        if (!gameOverRef.current) {
+            requestAnimationFrameRef.current = requestAnimationFrame(update);
+        }
+
         // If game is over, stop the loop
         if (gameOverRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
+            cancelAnimationFrame(requestAnimationFrameRef.current);
+            requestAnimationFrameRef.current = null;
             return;
         }
 
-        // Get current values from Animated.Value objects (using ._value for direct access)
         let currentBallX = ballXAnim._value;
         let currentBallY = ballYAnim._value;
         let currentVelocityY = velocityYRef.current;
+
         let currentPlatforms = platformsRef.current;
         let currentObstacles = obstaclesRef.current;
 
-        // Apply horizontal movement based on swipe direction
-        if (horizontalMoveDirectionRef.current !== 0) {
-            let newBallX = currentBallX + horizontalMoveDirectionRef.current * BALL_MOVE_SPEED;
-            // Clamp ballX to stay within playable area
-            newBallX = Math.max(0, Math.min(PLAYABLE_WIDTH_PX - BALL_SIZE, newBallX));
-            ballXAnim.setValue(newBallX); // Update Animated.Value for rendering
-            currentBallX = newBallX; // Update for current frame's collision checks
-        }
-
-        // Apply gravity to vertical velocity
         currentVelocityY += GRAVITY;
         let newY = currentBallY + currentVelocityY;
 
-        // Check for platform collision and bounce
         let bounced = false;
         for (let plat of currentPlatforms) {
-            // Check if ball is falling and will land on a platform in this frame
+            const platY = plat.yPos._value; // Read current Animated.Value
             if (
-                currentBallY + BALL_SIZE <= plat.y &&
-                newY + BALL_SIZE >= plat.y &&
+                currentBallY + BALL_SIZE <= platY &&
+                newY + BALL_SIZE >= platY &&
                 currentBallX + BALL_SIZE > plat.x &&
                 currentBallX < plat.x + PLATFORM_WIDTH &&
                 currentVelocityY > 0
             ) {
-                currentVelocityY = JUMP_VELOCITY; // Apply upward jump velocity
+                currentVelocityY = JUMP_VELOCITY;
                 bounced = true;
-                break; // Only bounce on one platform per frame
+                break;
             }
         }
 
-        // If bounced, update score and potentially award Firebase points
         if (bounced) {
             setScore(prev => {
                 const newScore = prev + 1;
-                // Award 10 points for every 10 score points achieved
-                if (newScore > 0 && newScore % 10 === 0 && newScore > lastAwardedScoreRef.current) {
-                    updateFirebasePoints(10, `Bounce Game Score: ${newScore}`);
+                // Points are awarded in groups of 10 to reduce Firebase writes
+                if (newScore > 0 && newScore % 15 === 0 && newScore > lastAwardedScoreRef.current) {
+                    updateFirebasePoints(5, `Bounce Game Score: ${newScore}`);
                     lastAwardedScoreRef.current = newScore;
                 }
-                scoreRef.current = newScore; // Update ref for game over message
+                scoreRef.current = newScore;
                 return newScore;
             });
         }
 
-        // Check for obstacle collision
         for (let obs of currentObstacles) {
+            const obsY = obs.yPos._value; // Read current Animated.Value
             if (
-                newY + BALL_SIZE > obs.y &&
-                newY < obs.y + OBSTACLE_SIZE &&
+                newY + BALL_SIZE > obsY &&
+                newY < obsY + OBSTACLE_SIZE &&
                 currentBallX + BALL_SIZE > obs.x &&
                 currentBallX < obs.x + OBSTACLE_SIZE
             ) {
-                setGameOver(true); // Set game over state
-                clearInterval(intervalRef.current); // Stop the game loop
-                intervalRef.current = null;
-                Alert.alert('Game Over!', `You hit an obstacle! Score: ${scoreRef.current}`, [
-                    { text: 'Restart', onPress: () => resetGame() }, // Offer to restart
+                setGameOver(true);
+                cancelAnimationFrame(requestAnimationFrameRef.current);
+                requestAnimationFrameRef.current = null;
+                Alert.alert('Game Over!', `You hit an obstacle! Score: ${scoreRef.current}`, [ // Using Alert
+                    { text: 'Restart', onPress: () => resetGame() },
                 ]);
-                return; // Stop further updates
+                return;
             }
         }
 
-        // Scroll platforms and obstacles down
-        let scrolledPlatforms = currentPlatforms.map(p => ({ ...p, y: p.y + SCROLL_SPEED }));
-        let scrolledObstacles = currentObstacles.map(o => ({ ...o, y: o.y + SCROLL_SPEED }));
-
-        // Filter out elements that moved off screen (bottom of PLAYABLE_HEIGHT_PX)
-        let activePlatforms = scrolledPlatforms.filter(p => p.y < PLAYABLE_HEIGHT_PX);
-        let activeObstacles = scrolledObstacles.filter(o => o.y < PLAYABLE_HEIGHT_PX);
-
-        // Spawn new platform at top if needed
-        if (activePlatforms.length < MAX_PLATFORMS) {
-            // Find highest platform y (smallest Y) to base new platform spawn
-            const highestPlatformY = activePlatforms.length > 0 ?
-                Math.min(...activePlatforms.map(p => p.y)) : PLAYABLE_HEIGHT_PX; // If no platforms, start from bottom
-            const newPlatformY = highestPlatformY - PLATFORM_SPACING_Y;
-            activePlatforms.push({ x: getBiasedRandomX(PLAYABLE_WIDTH_PX / 2), y: newPlatformY });
-        }
-        activePlatforms.sort((a, b) => a.y - b.y); // Sort by Y ascending (highest has smallest Y)
-
-        // Spawn new obstacles independently in the air if needed
-        while (activeObstacles.length < MAX_OBSTACLES) {
-            activeObstacles.push({
-                x: getBiasedRandomX(PLAYABLE_WIDTH_PX / 2),
-                // Spawn above screen with a random offset to vary entry points
-                y: -(OBSTACLE_SIZE + Math.random() * OBSTACLE_SPAWN_HEIGHT_OFFSET),
-            });
+        // --- Object Recycling Logic for Platforms ---
+        // Find the highest platform *before* any updates for this frame, to maintain consistent spacing
+        let highestActivePlatformY = -Infinity;
+        if (currentPlatforms.length > 0) {
+            highestActivePlatformY = Math.min(...currentPlatforms.map(p => p.yPos._value));
         }
 
-        // Update platform and obstacle states
-        setPlatforms(activePlatforms);
-        platformsRef.current = activePlatforms;
-        setObstacles(activeObstacles);
-        obstaclesRef.current = activeObstacles;
+        for (let plat of currentPlatforms) {
+            const currentPlatY = plat.yPos._value;
+            const newPlatY = currentPlatY + SCROLL_SPEED;
+            plat.yPos.setValue(newPlatY); // Update Animated.Value directly for rendering
+            plat.y = newPlatY; // Keep numerical y in sync for collision
 
-        // Check if ball falls below the playable area (game over condition)
+            if (newPlatY >= PLAYABLE_HEIGHT_PX) {
+                // Recycle: Move to top and reset x
+                // The new Y position should be consistently above the highest currently active platform
+                // to maintain continuous, jumpable vertical spacing.
+                const recycledPlatY = highestActivePlatformY - PLATFORM_SPACING_Y;
+                plat.yPos.setValue(recycledPlatY); // Update Y
+                plat.y = recycledPlatY; // Keep numerical y in sync for collision
+
+                const newX = getBiasedRandomX(PLAYABLE_WIDTH_PX / 2);
+                plat.xPos.setValue(newX); // Update X using Animated.Value for rendering
+                plat.x = newX; // Keep numerical x in sync for collision
+            }
+        }
+
+        // --- Object Recycling Logic for Obstacles ---
+        for (let obs of currentObstacles) {
+            const currentObsY = obs.yPos._value;
+            const newObsY = currentObsY + SCROLL_SPEED;
+            obs.yPos.setValue(newObsY); // Update Animated.Value directly for rendering
+            obs.y = newObsY; // Keep numerical y in sync for collision
+
+            if (newObsY >= PLAYABLE_HEIGHT_PX) {
+                // Recycle: Move to top and reset x
+                // Spawn above screen, ensuring it's not immediately visible and has varied entry points
+                const recycledObsY = -(OBSTACLE_SIZE + INITIAL_OBSTACLE_OFFSCREEN_HEIGHT + Math.random() * (PLAYABLE_HEIGHT_PX / 2));
+                obs.yPos.setValue(recycledObsY); // Update Y
+                obs.y = recycledObsY; // Keep numerical y in sync for collision
+
+                const newX = getBiasedRandomX(PLAYABLE_WIDTH_PX / 2);
+                obs.xPos.setValue(newX); // Update X using Animated.Value for rendering
+                obs.x = newX; // Keep numerical x in sync for collision
+            }
+        }
+
         if (newY > PLAYABLE_HEIGHT_PX) {
             setGameOver(true);
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-            Alert.alert('Game Over!', `You fell! Score: ${scoreRef.current}`, [
+            cancelAnimationFrame(requestAnimationFrameRef.current);
+            requestAnimationFrameRef.current = null;
+            Alert.alert('Game Over!', `You fell! Score: ${scoreRef.current}`, [ // Using Alert
                 { text: 'Restart', onPress: () => resetGame() },
             ]);
             return;
         }
 
-        ballYAnim.setValue(newY); // Update Animated.Value for rendering
-        velocityYRef.current = currentVelocityY; // Update ref for next frame's calculation
-    }, [updateFirebasePoints, resetGame, ballXAnim, ballYAnim]); // Add Animated.Value objects to dependencies
+        ballYAnim.setValue(newY);
+        velocityYRef.current = currentVelocityY;
+    }, [updateFirebasePoints, resetGame, ballYAnim, ballXAnim]);
 
     /**
      * Resets the game to its initial state and starts a new game loop.
      */
     const resetGame = useCallback(() => {
-        // Clear any existing game interval first to prevent multiple intervals running
-        if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
+        // Clear any existing game animation frame first to prevent multiple loops running
+        if (requestAnimationFrameRef.current) {
+            cancelAnimationFrame(requestAnimationFrameRef.current);
+            requestAnimationFrameRef.current = null;
         }
 
-        // --- Ball initial position ---
-        // Place the ball reasonably high within the playable area.
-        const initialBallY = PLAYABLE_HEIGHT_PX * 0.7; // Start ball at 70% down from top of playable area
-        ballXAnim.setValue(PLAYABLE_WIDTH_PX / 2 - BALL_SIZE / 2); // Set Animated.Value
-        ballYAnim.setValue(initialBallY); // Set Animated.Value
-        velocityYRef.current = 0; // Ball starts with no vertical velocity
+        // Reset ball position and velocity
+        const initialBallY = PLAYABLE_HEIGHT_PX * 0.5; // Start ball mid-screen vertically
+        ballXAnim.setValue(PLAYABLE_WIDTH_PX / 2 - BALL_SIZE / 2); // Center ball horizontally
+        ballYAnim.setValue(initialBallY);
+        velocityYRef.current = 0;
 
-        // --- Platforms initialization ---
-        const initialPlatforms = [];
-        // The first platform should be placed just below where the ball starts
-        // to ensure the ball is on a platform at the beginning.
-        const firstPlatformY = initialBallY + BALL_SIZE + 5; // 5px offset below ball
-        initialPlatforms.push({
-            x: PLAYABLE_WIDTH_PX / 2 - PLATFORM_WIDTH / 2, // Center the first platform
+        // --- Initialize Fixed Platforms Array for Object Pooling ---
+        const newInitialPlatforms = [];
+        // The first platform is directly under the ball for a guaranteed start
+        const firstPlatformX = PLAYABLE_WIDTH_PX / 2 - PLATFORM_WIDTH / 2;
+        const firstPlatformY = initialBallY + BALL_SIZE + 5;
+        newInitialPlatforms.push({
+            id: 'plat-0', // Unique ID for React keys
+            x: firstPlatformX, // Numerical x for collision
+            xPos: new Animated.Value(firstPlatformX), // Animated Value for rendering
             y: firstPlatformY,
+            yPos: new Animated.Value(firstPlatformY) // Animated Value for rendering
         });
 
-        // Generate remaining platforms above the first one, maintaining spacing
+        // Initialize subsequent platforms above the first one, maintaining jumpable spacing
         for (let i = 1; i < MAX_PLATFORMS; i++) {
-            initialPlatforms.push({
-                x: getBiasedRandomX(PLAYABLE_WIDTH_PX / 2),
-                y: firstPlatformY - i * PLATFORM_SPACING_Y,
+            const platY = firstPlatformY - (i * PLATFORM_SPACING_Y); // Distribute upwards
+            const platX = getBiasedRandomX(PLAYABLE_WIDTH_PX / 2);
+            newInitialPlatforms.push({
+                id: `plat-${i}`,
+                x: platX, // Numerical x for collision
+                xPos: new Animated.Value(platX), // Animated Value for rendering
+                y: platY,
+                yPos: new Animated.Value(platY)
             });
         }
-        initialPlatforms.sort((a, b) => a.y - b.y); // Sort by Y ascending (highest has smallest Y)
+        // Ensure platforms are sorted by Y for consistent processing, though not strictly required with Animated.Value
+        newInitialPlatforms.sort((a, b) => a.yPos._value - b.yPos._value);
 
-        setPlatforms(initialPlatforms);
-        platformsRef.current = initialPlatforms;
+        platformsRef.current = newInitialPlatforms; // Update ref directly
+        setPlatforms(newInitialPlatforms); // Set state ONCE for initial render
 
-        // --- Obstacles initialization (in the air) ---
-        const initialObstacles = [];
+        // --- Initialize Fixed Obstacles Array for Object Pooling ---
+        const newInitialObstacles = [];
         for (let i = 0; i < MAX_OBSTACLES; i++) {
-            initialObstacles.push({
-                x: getBiasedRandomX(PLAYABLE_WIDTH_PX / 2),
-                // Distribute initial obstacles vertically above the playable area
-                y: -(OBSTACLE_SIZE + Math.random() * OBSTACLE_SPAWN_HEIGHT_OFFSET) - i * (PLAYABLE_HEIGHT_PX / MAX_OBSTACLES),
+            // Obstacles initially appear far above the screen, staggered
+            const obsY = -(PLAYABLE_HEIGHT_PX * 0.5) - (i * (PLAYABLE_HEIGHT_PX / MAX_OBSTACLES)) - (Math.random() * OBSTACLE_SIZE);
+            const obsX = getBiasedRandomX(PLAYABLE_WIDTH_PX / 2);
+            newInitialObstacles.push({
+                id: `obs-${Date.now()}-${i}`, // Unique ID
+                x: obsX, // Numerical x for collision
+                xPos: new Animated.Value(obsX), // Animated Value for rendering
+                y: obsY,
+                yPos: new Animated.Value(obsY)
             });
         }
-        setObstacles(initialObstacles);
-        obstaclesRef.current = initialObstacles;
+        obstaclesRef.current = newInitialObstacles; // Update ref directly
+        setObstacles(newInitialObstacles); // Set state ONCE for initial render
 
         // Reset scores and game status
         setScore(0);
@@ -364,31 +384,40 @@ export default function BounceGame() {
         setGameOver(false);
         gameOverRef.current = false;
         lastAwardedScoreRef.current = 0;
-        horizontalMoveDirectionRef.current = 0;
 
-        loadCurrentPoints(); // Load points when a new game starts
+        loadCurrentPoints();
 
         // Start the game loop immediately after resetting all states
-        // The `update` function is a useCallback, so it's stable and can be used here.
-        intervalRef.current = setInterval(() => update(), 16);
-    }, [loadCurrentPoints, update, ballXAnim, ballYAnim]); // Add Animated.Value objects to dependencies
+        requestAnimationFrameRef.current = requestAnimationFrame(update);
+    }, [loadCurrentPoints, update, ballXAnim, ballYAnim]);
 
     /**
-     * useFocusEffect hook to manage game loop based on screen focus.
-     * Starts the game when the screen is focused and cleans up when it blurs.
+     * useFocusEffect hook to manage game loop and background task based on screen focus.
+     * Stops the background location task when focused, *does not* restart it when blurred.
      */
     useFocusEffect(
         React.useCallback(() => {
+            const stopBackgroundTask = async () => {
+                const isTaskRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TRACKING_TASK);
+                if (isTaskRegistered) {
+                    const isTracking = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK);
+                    if (isTracking) {
+                        console.log('BounceGame: Stopping background location task...');
+                        await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
+                    }
+                }
+            };
+
+            stopBackgroundTask(); // Stop when game screen focuses
             resetGame(); // Initial game setup and start when screen focuses
 
             return () => {
-                // Cleanup function: clear interval when screen loses focus or component unmounts
-                if (intervalRef.current) {
-                    clearInterval(intervalRef.current);
-                    intervalRef.current = null;
+                if (requestAnimationFrameRef.current) {
+                    cancelAnimationFrame(requestAnimationFrameRef.current);
+                    requestAnimationFrameRef.current = null;
                 }
             };
-        }, [resetGame]) // `resetGame` is a dependency, ensuring it's the latest version
+        }, [resetGame])
     );
 
     /**
@@ -397,29 +426,20 @@ export default function BounceGame() {
     const panResponder = useRef(
         PanResponder.create({
             onStartShouldSetPanResponder: () => true,
-            onMoveShouldSetPanResponder: () => true,
-            onPanResponderGrant: () => {
-                // Reset horizontal movement direction on touch start
-                horizontalMoveDirectionRef.current = 0;
+            onMoveShouldSetPanResponder: (evt, gestureState) => {
+                return Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && Math.abs(gestureState.dx) > 5;
+            },
+            onPanResponderGrant: (evt, gestureState) => {
+                ballXAnim.stopAnimation();
+                ballStartX.current = ballXAnim._value;
             },
             onPanResponderMove: (evt, gestureState) => {
-                // Set direction based on horizontal swipe
-                if (gestureState.dx > 10) { // Swiping right
-                    horizontalMoveDirectionRef.current = 1;
-                } else if (gestureState.dx < -10) { // Swiping left
-                    horizontalMoveDirectionRef.current = -1;
-                } else {
-                    horizontalMoveDirectionRef.current = 0; // No significant horizontal movement
-                }
+                let newX = ballStartX.current + gestureState.dx;
+                newX = Math.max(0, Math.min(PLAYABLE_WIDTH_PX - BALL_SIZE, newX));
+                ballXAnim.setValue(newX);
             },
-            onPanResponderRelease: () => {
-                // Stop horizontal movement when touch is released
-                horizontalMoveDirectionRef.current = 0;
-            },
-            onPanResponderTerminate: () => {
-                // Stop horizontal movement if gesture is interrupted
-                horizontalMoveDirectionRef.current = 0;
-            },
+            onPanResponderRelease: () => {},
+            onPanResponderTerminate: () => {},
         })
     ).current;
 
@@ -430,38 +450,38 @@ export default function BounceGame() {
             <Text style={styles.pointsText}>Total Points: {currentPoints}</Text>
             <View
                 style={styles.gameArea}
-                {...panResponder.panHandlers} // Attach pan handlers to the game area
+                {...panResponder.panHandlers}
             >
-                {/* Ball - now Animated.View for native performance */}
+                {/* Ball - Animated.View for native performance */}
                 <Animated.View
                     style={[
                         styles.ball,
-                        { left: ballXAnim, top: ballYAnim }, // Use Animated.Value directly here
+                        { left: ballXAnim, top: ballYAnim },
                     ]}
                 />
-                {/* Platforms */}
-                {platforms.map((p, i) => (
-                    <View
-                        key={`plat-${i}`}
+                {/* Platforms - NOW Animated.View for native performance for both X and Y */}
+                {platforms.map((p) => ( // Using p.id for key
+                    <Animated.View
+                        key={p.id}
                         style={[
                             styles.platform,
-                            { left: p.x, top: p.y },
+                            { left: p.xPos, top: p.yPos }, // Use Animated.Value for both left and top
                         ]}
                     />
                 ))}
-                {/* Obstacles */}
-                {obstacles.map((o, i) => (
-                    <View
-                        key={`obs-${i}`}
+                {/* Obstacles - NOW Animated.View for native performance for both X and Y */}
+                {obstacles.map((o) => ( // Using o.id for key
+                    <Animated.View
+                        key={o.id}
                         style={[
                             styles.obstacle,
-                            { left: o.x, top: o.y },
+                            { left: o.xPos, top: o.yPos }, // Use Animated.Value for both left and top
                         ]}
                     />
                 ))}
             </View>
 
-            {/* Game Over Overlay */}
+            {/* Game Over Overlay (using simple View for overlay as Alert is used) */}
             {gameOver && (
                 <View style={styles.overlay}>
                     <Text style={styles.gameOver}>Game Over</Text>
@@ -477,7 +497,7 @@ export default function BounceGame() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#87CEEB', // Sky blue background
+        backgroundColor: '#87CEEB',
         alignItems: 'center',
         paddingTop: 20,
     },
@@ -485,7 +505,7 @@ const styles = StyleSheet.create({
         fontSize: 28,
         fontWeight: 'bold',
         marginBottom: 10,
-        color: '#333', // Dark text for contrast
+        color: '#333',
     },
     score: {
         marginTop: 10,
@@ -496,18 +516,18 @@ const styles = StyleSheet.create({
     },
     pointsText: {
         fontSize: 18,
-        color: '#007bff', // Blue for points
+        color: '#007bff',
         fontWeight: 'bold',
         marginBottom: 10,
     },
     gameArea: {
-        width: GAME_AREA_WIDTH_PX, // Use defined constant
-        height: GAME_AREA_HEIGHT_PX, // Use defined constant
-        backgroundColor: '#fff', // White game area background
-        borderWidth: GAME_AREA_BORDER_WIDTH, // Use defined constant
-        borderColor: '#000', // Black border
+        width: GAME_AREA_WIDTH_PX,
+        height: GAME_AREA_HEIGHT_PX,
+        backgroundColor: '#fff',
+        borderWidth: GAME_AREA_BORDER_WIDTH,
+        borderColor: '#000',
         position: 'relative',
-        overflow: 'hidden', // Ensures elements don't render outside
+        overflow: 'hidden',
     },
     ball: {
         width: BALL_SIZE,
@@ -525,7 +545,7 @@ const styles = StyleSheet.create({
     obstacle: {
         width: OBSTACLE_SIZE,
         height: OBSTACLE_SIZE,
-        borderRadius: OBSTACLE_SIZE / 2, // Make obstacles round
+        borderRadius: OBSTACLE_SIZE / 2,
         backgroundColor: 'red',
         position: 'absolute',
     },
@@ -534,7 +554,7 @@ const styles = StyleSheet.create({
         top: '40%',
         left: '20%',
         right: '20%',
-        backgroundColor: 'rgba(0,0,0,0.7)', // Semi-transparent black
+        backgroundColor: 'rgba(0,0,0,0.7)',
         padding: 30,
         borderRadius: 20,
         alignItems: 'center',
@@ -560,5 +580,5 @@ const styles = StyleSheet.create({
         color: '#333',
         fontSize: 18,
         fontWeight: 'bold',
-    }
+    },
 });

@@ -5,7 +5,6 @@ import {
     StyleSheet,
     Dimensions,
     Animated,
-    Alert,
     TouchableOpacity,
     Platform,
 } from 'react-native';
@@ -13,17 +12,21 @@ import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getFirestore, doc, updateDoc, setDoc, getDoc, arrayUnion, increment } from 'firebase/firestore';
+import { 
+    getFirestore, doc, updateDoc, setDoc, getDoc, arrayUnion, increment, onSnapshot 
+} from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import Constants from 'expo-constants'; 
+import { useFocusEffect } from '@react-navigation/native'; // <--- NEW IMPORT
+
 // Initialize Firebase outside the component to be accessible by background task
 // IMPORTANT: Ensure Firebase is properly initialized in your app's entry point (e.g., App.js)
-// before these are called.
 const db = getFirestore();
 const auth = getAuth();
 
 // --- Constants for Traffic Logic ---
-const GOOGLE_API_KEY = Constants.expoConfig.extra.GOOGLE_API_KEY;
+// NOTE: Reconstructed based on previous conversation. You might need to adjust GOOGLE_API_KEY if it's dynamic.
+const GOOGLE_API_KEY = Constants.expoConfig.extra.GOOGLE_API_KEY; 
 // Unique task name for Expo's TaskManager
 const LOCATION_TRACKING_TASK = 'trafficshare-location-task';
 
@@ -35,7 +38,7 @@ const STUCK_TIME_THRESHOLD_MS = 1000 * 60 * 1; // User must be stationary for at
 const COOLDOWN_INTERVAL_MS = 1000 * 60 * 5; // 5 minutes (300,000 ms) cooldown
 
 // Traffic ratio thresholds for categorizing traffic severity
-const HEAVY_TRAFFIC_RATIO = 1.5;    // If duration_in_traffic / normal_duration > this, it's heavy traffic
+const HEAVY_TRAFFIC_RATIO = 1.5;      // If duration_in_traffic / normal_duration > this, it's heavy traffic
 const MODERATE_TRAFFIC_RATIO = 1.10; // If duration_in_traffic / normal_duration > this, it's moderate traffic
 
 // Distance ahead to check traffic status using Google Distance Matrix API
@@ -45,8 +48,9 @@ const TRAFFIC_CHECK_DISTANCE_METERS = 30;
 const ON_ROAD_THRESHOLD_METERS = 10;
 
 // Minimum interval between Google API calls in the background task
-const MIN_API_CALL_INTERVAL_MS_TRAFFIC = 1000 * 30; // 30 seconds for traffic API
-const MIN_API_CALL_INTERVAL_MS_ROADS = 1000 * 60;   // 1 minute for roads API
+// Using optimized values from previous discussion for less aggressive calls
+const MIN_API_CALL_INTERVAL_MS_TRAFFIC = 1000 * 60 * 1; // 1 minute
+const MIN_API_CALL_INTERVAL_MS_ROADS = 1000 * 60 * 3;   // 3 minutes
 
 
 // --- Helper Functions (moved outside to be accessible by background task context) ---
@@ -359,7 +363,8 @@ export default function TrafficPage() {
     const [loading, setLoading] = useState(true); // Keep loading true initially
 
     // State for MapView key to force remount and refresh traffic layer
-    const [trafficKey, setTrafficKey] = useState(0);
+    // Removed trafficKey state as it's no longer needed for map remounting
+    // const [trafficKey, setTrafficKey] = useState(0); 
     // State for current foreground location
     const [location, setLocation] = useState(null);
     // State for snapped location (on road) for foreground map marker
@@ -380,11 +385,11 @@ export default function TrafficPage() {
     const userDocRef = user ? doc(db, 'users', user.uid) : null;
 
     // Function to load current points and lastPointTime from Firebase
+    // Now primarily for initial load and fallback, as onSnapshot handles real-time.
     const loadCurrentPointsAndLastPointTime = useCallback(async () => {
         if (!userDocRef) {
             setPoints(0);
             setLastPointTime(0);
-            // Don't set loading to false here, it's handled after location is obtained
             return;
         }
         try {
@@ -403,117 +408,145 @@ export default function TrafficPage() {
             setPoints(0);
             setLastPointTime(0);
         }
-        // Removed finally block that set loading to false
     }, [userDocRef]);
 
 
     // Effect to ensure user's points field exists in Firestore on component mount
+    // And to set up Firestore listener for real-time points updates
     useEffect(() => {
-        if (userDocRef) {
-            ensureUserPointsField(userDocRef).catch(console.error);
+        if (!userDocRef) {
+            setPoints(0); // Ensure points are 0 if no user
+            setLastPointTime(0);
+            return;
         }
-        // Load initial points and lastPointTime from Firestore
-        loadCurrentPointsAndLastPointTime();
-    }, [userDocRef, loadCurrentPointsAndLastPointTime]);
 
-    // --- Foreground Location and Background Task Management ---
-    useEffect(() => {
-        const requestPermissionsAndStartTracking = async () => {
-            console.log('TrafficShare-Foreground: Requesting foreground permissions...');
-            const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
-            if (foregroundStatus !== 'granted') {
-                Alert.alert('Permission Denied', 'Foreground location access is required for map and initial checks.');
-                console.error('TrafficShare-Foreground: Foreground permission denied.');
-                setLoading(false); // Stop loading if permission denied
-                return;
-            }
-            console.log('TrafficShare-Foreground: Foreground permissions granted.');
+        ensureUserPointsField(userDocRef).catch(console.error);
 
-            console.log('TrafficShare-Foreground: Requesting background permissions...');
-            const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
-            if (backgroundStatus !== 'granted') {
-                Alert.alert('Permission Denied', 'Background location access is required to award points when the app is closed.');
-                console.error('TrafficShare-Foreground: Background permission denied.');
-                setLoading(false); // Stop loading if permission denied
-                return;
-            }
-            console.log('TrafficShare-Foreground: Background permissions granted.');
-
-            // --- Get initial current location once ---
-            try {
-                const initialLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
-                setLocation(initialLocation.coords);
-                console.log(`[${new Date().toLocaleTimeString()}] TrafficShare-Foreground: Initial Location: ${initialLocation.coords.latitude.toFixed(5)}, ${initialLocation.coords.longitude.toFixed(5)}`);
-                setLoading(false); // Set loading to false once initial location is obtained
-            } catch (error) {
-                console.error('TrafficShare-Foreground: Error getting initial location:', error);
-                Alert.alert('Location Error', 'Could not get your current location. Please ensure GPS is enabled.');
-                setLoading(false); // Set loading to false even if initial location fails
-                return;
-            }
-
-
-            // Start foreground location watch for map display and immediate UI updates
-            const foregroundSubscriber = await Location.watchPositionAsync(
-                { accuracy: Location.Accuracy.Highest, distanceInterval: 10, timeInterval: 10000 },
-                (locUpdate) => {
-                    setLocation(locUpdate.coords);
-                    console.log(`[${new Date().toLocaleTimeString()}] TrafficShare-Foreground: Current Location: ${locUpdate.coords.latitude.toFixed(5)}, ${locUpdate.coords.longitude.toFixed(5)}`);
-                }
-            );
-
-            // --- START: MODIFIED LOGIC FOR FORCING BACKGROUND TASK RESTART ---
-            const isTaskRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TRACKING_TASK);
-            if (isTaskRegistered) {
-                console.log('TrafficShare-Foreground: Background task already registered. Stopping and restarting...');
-                try {
-                    await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
-                    console.log('TrafficShare-Foreground: Background task successfully stopped.');
-                } catch (e) {
-                    console.error('TrafficShare-Foreground: Error stopping background task:', e);
-                }
+        const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                setPoints(data.points ?? 0);
+                setLastPointTime(data.lastPointTime ?? 0);
             } else {
-                console.log('TrafficShare-Foreground: Background task not registered.');
+                setPoints(0);
+                setLastPointTime(0);
             }
+        }, (error) => {
+            console.error("TrafficShare-Foreground: Error listening to user points:", error);
+            setPoints(0);
+            setLastPointTime(0);
+        });
 
-            console.log('TrafficShare-Foreground: Attempting to start background location updates...');
-            try {
-                await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
-                    accuracy: Location.Accuracy.Highest, // Aggressive for testing
-                    distanceInterval: 0, // Aggressive for testing
-                    timeInterval: 5000, // Aggressive for testing (every 5 seconds)
-                    deferredUpdatesInterval: 5000, // Aggressive for testing (defer for 5 seconds)
-                    // Foreground service configuration for persistent notification
-                    foregroundService: {
-                        notificationTitle: 'TrafficShare',
-                        notificationBody: 'Tracking your location for traffic points',
-                        notificationColor: '#4caf50', // Green color for notification
-                        // Optional: notificationChannelId for Android 8.0+
-                        // notificationChannelId: 'traffic_rewards_channel',
-                    },
-                });
-                console.log('TrafficShare-Foreground: Background location task started successfully.');
-            } catch (e) {
-                console.error('TrafficShare-Foreground: Error starting background location task:', e);
-            }
-            // --- END: MODIFIED LOGIC FOR FORCING BACKGROUND TASK RESTART ---
+        // Cleanup listener on unmount
+        return () => unsubscribe();
+    }, [userDocRef]); // Dependency on userDocRef to re-run if user changes
 
-            // Cleanup function for when the component unmounts
-            return () => {
-                if (foregroundSubscriber) foregroundSubscriber.remove();
-                // For continuous tracking, the background task is usually left running.
-                // To stop it for testing:
-                // TaskManager.isTaskRegisteredAsync(LOCATION_TRACKING_TASK).then(isRegistered => {
-                //   if (isRegistered) Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
-                // });
+
+    // --- Foreground Location and Background Task Management using useFocusEffect ---
+    useFocusEffect(
+        useCallback(() => {
+            const requestPermissionsAndStartTracking = async () => {
+                // IMPORTANT: This version does NOT have createNotificationChannel
+                // It was added later for physical device background reliability.
+                // If you re-introduce it, ensure it's properly imported and implemented.
+
+                console.log('TrafficShare-Foreground: Requesting foreground permissions...');
+                const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
+                if (foregroundStatus !== 'granted') {
+                    console.error('TrafficShare-Foreground: Foreground location access is required for map and initial checks.');
+                    setLoading(false);
+                    return;
+                }
+                console.log('TrafficShare-Foreground: Foreground permissions granted.');
+
+                console.log('TrafficShare-Foreground: Requesting background permissions...');
+                const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
+                if (backgroundStatus !== 'granted') {
+                    console.error('TrafficShare-Foreground: Background location access is required to award points when the app is closed.');
+                    setLoading(false);
+                    return;
+                }
+                console.log('TrafficShare-Foreground: Background permissions granted.');
+
+                // --- Get initial current location once ---
+                try {
+                    const initialLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+                    setLocation(initialLocation.coords);
+                    console.log(`[${new Date().toLocaleTimeString()}] TrafficShare-Foreground: Initial Location: ${initialLocation.coords.latitude.toFixed(5)}, ${initialLocation.coords.longitude.toFixed(5)}`);
+                    setLoading(false);
+                } catch (error) {
+                    console.error('TrafficShare-Foreground: Error getting initial location:', error);
+                    setLoading(false);
+                    return;
+                }
+
+                // Start foreground location watch for map display and immediate UI updates
+                const foregroundSubscriber = await Location.watchPositionAsync(
+                    { accuracy: Location.Accuracy.Balanced, distanceInterval: 50, timeInterval: 10000 },
+                    (locUpdate) => {
+                        setLocation(locUpdate.coords);
+                        console.log(`[${new Date().toLocaleTimeString()}] TrafficShare-Foreground: Current Location: ${locUpdate.coords.latitude.toFixed(5)}, ${locUpdate.coords.longitude.toFixed(5)}`);
+                    }
+                );
+
+                // --- Manage Background Task Lifecycle based on focus ---
+                const isTaskRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TRACKING_TASK);
+                if (isTaskRegistered) {
+                    // Always try to stop and then restart to ensure it's in a clean state
+                    console.log('TrafficShare-Foreground: Background task already registered. Stopping and restarting...');
+                    try {
+                        await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
+                        console.log('TrafficShare-Foreground: Background task successfully stopped.');
+                    } catch (e) {
+                        console.error('TrafficShare-Foreground: Error stopping background task during restart:', e);
+                    }
+                } else {
+                    console.log('TrafficShare-Foreground: Background task not registered, attempting to start.');
+                }
+
+                console.log('TrafficShare-Foreground: Attempting to start background location updates...');
+                try {
+                    await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
+                        accuracy: Location.Accuracy.High,
+                        distanceInterval: 20,
+                        timeInterval: 40000,
+                        deferredUpdatesInterval: 60000,
+                        foregroundService: {
+                            notificationTitle: 'TrafficShare',
+                            notificationBody: 'Tracking your location for traffic points',
+                            notificationColor: '#4caf50',
+                            // notificationChannelId: 'traffic_rewards_channel', // This was commented out in this version
+                        },
+                    });
+                    console.log('TrafficShare-Foreground: Background location task started successfully.');
+                } catch (e) {
+                    console.error('TrafficShare-Foreground: Error starting background location task:', e);
+                }
+
+                // Cleanup function: This runs when the component loses focus (e.g., tab switch)
+                return () => {
+                    if (foregroundSubscriber) foregroundSubscriber.remove();
+                    
+                    TaskManager.isTaskRegisteredAsync(LOCATION_TRACKING_TASK).then(isRegistered => {
+                        if (isRegistered) {
+                            Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK).then(isTracking => {
+                                if (isTracking) {
+                                    console.log('TrafficShare-Foreground: Stopping background task on blur (lost focus).');
+                                    Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK).catch(e => {
+                                        console.error('TrafficShare-Foreground: Error stopping background task on blur:', e);
+                                    });
+                                }
+                            });
+                        }
+                    });
+                };
             };
-        };
 
-        requestPermissionsAndStartTracking();
-    }, []); // Empty dependency array means this effect runs once on mount
+            requestPermissionsAndStartTracking();
+        }, []) 
+    );
 
-    // --- Foreground UI Updates from Background Task Results ---
-    // This effect periodically reads data stored by the background task in AsyncStorage
+    // --- Foreground UI Updates from Background Task Results (Only AsyncStorage data now) ---
     useEffect(() => {
         const updateForegroundUI = async () => {
             try {
@@ -521,45 +554,33 @@ export default function TrafficPage() {
                 const currentIsOnRoad = await AsyncStorage.getItem('backgroundIsOnRoad');
                 const currentIsStuck = await AsyncStorage.getItem('backgroundIsStuck');
                 const currentSnappedLocation = await AsyncStorage.getItem('backgroundSnappedLocation');
-                const currentLastPointTimeAsync = await AsyncStorage.getItem('lastPointTime'); // Read from AsyncStorage
 
                 if (currentTrafficStatus) setTrafficStatus(currentTrafficStatus);
                 if (currentIsOnRoad !== null) setIsOnRoad(JSON.parse(currentIsOnRoad));
                 if (currentIsStuck !== null) setIsStuck(JSON.parse(currentIsStuck));
                 if (currentSnappedLocation) setSnappedLocation(JSON.parse(currentSnappedLocation));
-                if (currentLastPointTimeAsync !== null) setLastPointTime(parseInt(currentLastPointTimeAsync));
-
-                // Also fetch latest points from Firestore to ensure UI is up-to-date
-                if (userDocRef) {
-                    const docSnap = await getDoc(userDocRef);
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        setPoints(data.points ?? 0);
-                    }
-                }
             } catch (error) {
-                console.error("TrafficShare-Foreground: Error updating UI from AsyncStorage/Firestore:", error);
+                console.error("TrafficShare-Foreground: Error updating UI from AsyncStorage:", error);
             }
         };
 
-        // Update UI immediately on mount and then every 5 seconds
         updateForegroundUI();
-        const uiUpdateInterval = setInterval(updateForegroundUI, 5000);
+        const uiUpdateInterval = setInterval(updateForegroundUI, 40000);
 
-        return () => clearInterval(uiUpdateInterval); // Cleanup interval on unmount
-    }, [userDocRef, setPoints, setLastPointTime]); // Dependencies for this effect
+        return () => clearInterval(uiUpdateInterval);
+    }, []);
 
-    // Cooldown timer for display in the UI
+    // Cooldown timer for display in the UI (remains the same, dependent on lastPointTime from listener)
     useEffect(() => {
         const interval = setInterval(() => {
             const now = Date.now();
             const remaining = COOLDOWN_INTERVAL_MS - (now - lastPointTime);
             setCooldownLeft(remaining > 0 ? remaining : 0);
-        }, 1000); // Update every second
-        return () => clearInterval(interval); // Cleanup interval on unmount
-    }, [lastPointTime]); // Dependency for this effect
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [lastPointTime]);
 
-    // Banner display logic (e.g., for point awards, though not directly used for that here)
+    // Banner display logic
     const showBanner = (text) => {
         setBannerText(text);
         Animated.sequence([
@@ -569,48 +590,33 @@ export default function TrafficPage() {
         ]).start();
     };
 
-    // Function to manually refresh map traffic layer and foreground data
+    // Manual refresh function (only triggers UI update from AsyncStorage now)
     const refreshTrafficLayer = useCallback(() => {
-        setTrafficKey(prev => prev + 1); // Increment key to force MapView remount
-        // Trigger a UI update from AsyncStorage to reflect latest background task results
-        // The background task itself handles the throttling of actual API calls
         (async () => {
             try {
                 const currentTrafficStatus = await AsyncStorage.getItem('backgroundTrafficStatus');
                 const currentIsOnRoad = await AsyncStorage.getItem('backgroundIsOnRoad');
                 const currentIsStuck = await AsyncStorage.getItem('backgroundIsStuck');
                 const currentSnappedLocation = await AsyncStorage.getItem('backgroundSnappedLocation');
-                const currentLastPointTimeAsync = await AsyncStorage.getItem('lastPointTime');
 
                 if (currentTrafficStatus) setTrafficStatus(currentTrafficStatus);
                 if (currentIsOnRoad !== null) setIsOnRoad(JSON.parse(currentIsOnRoad));
                 if (currentIsStuck !== null) setIsStuck(JSON.parse(currentIsStuck));
                 if (currentSnappedLocation) setSnappedLocation(JSON.parse(currentSnappedLocation));
-                if (currentLastPointTimeAsync !== null) setLastPointTime(parseInt(currentLastPointTimeAsync));
-
-                // Also fetch latest points from Firestore to ensure UI is up-to-date
-                if (userDocRef) {
-                    const docSnap = await getDoc(userDocRef);
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        setPoints(data.points ?? 0);
-                    }
-                }
             } catch (error) {
                 console.error("TrafficShare-Foreground: Error during manual refresh:", error);
             }
         })();
-    }, [userDocRef, setPoints, setLastPointTime]); // Depend on relevant setters
-
-    // Effect for automatic map traffic layer refresh (every minute)
-    useEffect(() => {
-        const id = setInterval(() => {
-            setTrafficKey(prev => prev + 1);
-        }, 60000); // Refresh every 60 seconds
-        return () => clearInterval(id); // Cleanup interval on unmount
     }, []);
 
-    // Show loading indicator if location or points are not yet loaded
+    // Removed the automatic map traffic layer refresh interval completely
+    // useEffect(() => {
+    //     const id = setInterval(() => {
+    //         setTrafficKey(prev => prev + 1);
+    //     }, 60000); 
+    //     return () => clearInterval(id);
+    // }, []);
+
     if (loading || !location) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
@@ -619,47 +625,42 @@ export default function TrafficPage() {
         );
     }
 
-    // Main component render
     return (
         <View style={styles.container}>
-            {/* Map View */}
             <MapView
                 provider={PROVIDER_GOOGLE}
-                key={trafficKey} // Key to force remount for traffic layer refresh
                 style={styles.map}
-                showsTraffic={true} // Enable traffic layer
+                showsTraffic={true}
                 region={
                     location
                         ? {
                             latitude: location.latitude,
                             longitude: location.longitude,
-                            latitudeDelta: 0.005, // Zoom level
-                            longitudeDelta: 0.005, // Zoom level
+                            latitudeDelta: 0.005,
+                            longitudeDelta: 0.005,
                         }
                         : undefined
                 }
-                showsUserLocation={true} // Show blue dot for user's current location
-                showsMyLocationButton={true} // Show button to center on user's location
+                showsUserLocation={true}
+                showsMyLocationButton={true}
             >
-                {/* Marker for snapped location (if available) */}
                 {snappedLocation && <Marker coordinate={snappedLocation} pinColor="blue" />}
             </MapView>
 
-            {/* Information Overlay */}
             <View style={styles.info}>
                 <Text style={styles.header}>Points: {points}</Text>
                 <Text>Traffic: {trafficStatus}</Text>
                 <Text>Stuck: {isStuck ? 'Yes' : 'No'}</Text>
                 <Text>Cooldown: {cooldownLeft !== null ? Math.ceil(cooldownLeft / 1000) + 's' : '...'}</Text>
                 <Text>On Road: {isOnRoad ? 'Yes' : 'No'}</Text>
+                {/* Removed Background Task Status Indicator as it was added later */}
+                {/* <Text>Background Task: {isBackgroundTaskRunning ? 'Running ✅' : 'Stopped ❌'}</Text> */}
 
-                {/* Refresh Button */}
                 <TouchableOpacity onPress={refreshTrafficLayer} style={styles.refreshButton}>
                     <Text style={styles.refreshButtonText}>🔄 Refresh Traffic</Text>
                 </TouchableOpacity>
             </View>
 
-            {/* Animated Banner for notifications */}
             <Animated.View
                 style={[
                     styles.banner,
@@ -669,7 +670,7 @@ export default function TrafficPage() {
                             {
                                 translateY: bannerAnim.interpolate({
                                     inputRange: [0, 1],
-                                    outputRange: [-50, 0], // Slide in from top
+                                    outputRange: [-50, 0],
                                 }),
                             },
                         ],
@@ -682,7 +683,6 @@ export default function TrafficPage() {
     );
 }
 
-// --- StyleSheet for component styling ---
 const styles = StyleSheet.create({
     container: { flex: 1 },
     map: { flex: 1 },
@@ -693,7 +693,7 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.9)',
         padding: 10,
         borderRadius: 8,
-        elevation: 5, // Android shadow
+        elevation: 5,
         zIndex: 2,
     },
     header: {
@@ -706,7 +706,7 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         height: 50,
-        backgroundColor: '#4caf50', // Green background
+        backgroundColor: '#4caf50',
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 10,
@@ -717,11 +717,11 @@ const styles = StyleSheet.create({
     },
     refreshButton: {
         marginTop: 10,
-        backgroundColor: '#007bff', // Blue color for the button
+        backgroundColor: '#007bff',
         paddingVertical: 8,
         paddingHorizontal: 12,
         borderRadius: 5,
-        alignSelf: 'flex-start', // Align to start of info box
+        alignSelf: 'flex-start',
     },
     refreshButtonText: {
         color: 'white',

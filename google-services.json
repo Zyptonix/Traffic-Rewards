@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "692231975295",
+    "project_id": "traffic-app-e4ddb",
+    "storage_bucket": "traffic-app-e4ddb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:692231975295:android:12f935a4b96145ca92ea4a",
+        "android_client_info": {
+          "package_name": "com.anonymous.trafficapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCfVQIem8TWUBLgcFQMorcFH8zmF_mjG-A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

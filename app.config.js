@@ -9,7 +9,7 @@ export default ({ config }) => {
     expo: {
       name: "Traffic Rewards",
       slug: "traffic-app",
-      version: "1.0.0",
+      version: "5.0.0",
       orientation: "portrait",
       icon: "./assets/images/icon.png",
       scheme: "trafficapp",
@@ -22,6 +22,7 @@ export default ({ config }) => {
         }
       },
       android: {
+        googleServicesFile: "./google-services.json",
         config: {
           googleMaps: {
             // Use GOOGLE_API_KEY from .env here
